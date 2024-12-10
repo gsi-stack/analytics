@@ -33,15 +33,16 @@
             <tr>
               <th>Tavolo</th>
               <th>Prodotto</th>
-              <th>Prezzo Unitario</th>
+              <th v-if="isFieldSelected('unitaryPrice')">Prezzo Unitario</th>
+              <th>Prezzo Complessivo</th>
+              <th>Prezzo Scontato</th>
+              <th>VAT (%)</th>
+              <th>Operatore</th>
               <th>Quantità</th>
-              <th v-if="isFieldSelected('totalPrice')">Prezzo Complessivo</th>
               <th v-if="isFieldSelected('productCategory')">Categoria prodotto</th>
-              <th v-if="isFieldSelected('businessActorName')">Nome responsabile</th>
-              <th v-if="isFieldSelected('tableNumber')">Numero tavolo</th>
-              <th v-if="isFieldSelected('docNumber')">Numero documento</th>
-              <th v-if="isFieldSelected('guestCount')">Quantità ospiti</th>
-              <th v-if="isFieldSelected('stayDuration')">Durata permanenza</th>
+              <th v-if="isFieldSelected('productCode')">Codice Prodotto</th>
+              <th v-if="isFieldSelected('accessNotes')">Note Tavolo</th>
+              <th v-if="isFieldSelected('arrivalTime')">Ora di Arrivo</th>
             </tr>
           </thead>
           <tbody>
@@ -49,21 +50,21 @@
               <tr>
                 <td>{{ item.tableName }}</td>
                 <td>{{ item.product }}</td>
-                <td>{{ item.computedUnitaryPrice.toFixed(2) }} €</td>
+                <td v-if="isFieldSelected('unitaryPrice')">{{ item.computedUnitaryPrice.toFixed(2) }} €</td>
+                <td>{{ (item.computedUnitaryPrice * item.quantity).toFixed(2) }} €</td>
+                <td>{{ item.discountedPrice.toFixed(2) }} €</td>
+                <td>{{ item.vat }}</td>
+                <td>{{ item.businessMember }}</td>
                 <td>{{ item.quantity }}</td>
-                <td v-if="isFieldSelected('totalPrice')">{{ (item.computedUnitaryPrice * item.quantity).toFixed(2) }} €</td>
                 <td v-if="isFieldSelected('productCategory')">{{ item.category }}</td>
-                <td v-if="isFieldSelected('businessActorName')">{{ group.businessActor }}</td>
-                <td v-if="isFieldSelected('tableNumber')">{{ item.tableNumber }}</td>
-                <td v-if="isFieldSelected('docNumber')">{{ item.docNumber }}</td>
-                <td v-if="isFieldSelected('guestCount')">{{ item.guestCount }}</td>
-                <td v-if="isFieldSelected('stayDuration')">{{ item.stayDuration }} minuti</td>
+                <td v-if="isFieldSelected('productCode')">{{ item.productCode }}</td>
+                <td v-if="isFieldSelected('accessNotes')">{{ item.accessNotes }}</td>
+                <td v-if="isFieldSelected('arrivalTime')">{{ item.formattedArrivalTime }}</td>
               </tr>
-              <tr
-                v-if="itemIndex === group.items.length - 1 || item.tableName !== group.items[itemIndex + 1]?.tableName"
-              >
-                <td colspan="3"><strong>Totale Tavolo: {{ calculateTableTotal(group.items, item.tableName).toFixed(2) }} €</strong></td>
-                <td colspan="3"><strong>Data: {{ item.date }}</strong></td>
+              <!-- RIGA AGGIUNTIVA: Totale del Tavolo e Data -->
+              <tr v-if="itemIndex === group.items.length - 1 || item.tableName !== group.items[itemIndex + 1]?.tableName">
+                <td colspan="4"><strong>Totale Tavolo: {{ calculateTableTotal(group.items, item.tableName).toFixed(2) }} €</strong></td>
+                <td colspan="4"><strong>Data: {{ item.date }}</strong></td>
               </tr>
             </template>
           </tbody>
@@ -80,17 +81,16 @@ export default {
   data() {
     return {
       groupedData: [],
+      businessMembers: {}, // Mappa per ID -> Nickname
       viewMode: "table",
       selectedFields: [], // Campi aggiuntivi selezionati
       showFieldSelector: false, // Controlla la visibilità del menu a tendina
       availableFields: [
-        { key: "totalPrice", label: "Prezzo complessivo" },
+        { key: "unitaryPrice", label: "Prezzo unitario" },
         { key: "productCategory", label: "Categoria prodotto" },
-        { key: "businessActorName", label: "Nome responsabile" },
-        { key: "tableNumber", label: "Numero tavolo" },
-        { key: "docNumber", label: "Numero documento" },
-        { key: "guestCount", label: "Quantità ospiti" },
-        { key: "stayDuration", label: "Durata permanenza" },
+        { key: "productCode", label: "Codice prodotto" },
+        { key: "accessNotes", label: "Note Tavolo" },
+        { key: "arrivalTime", label: "Ora di arrivo" },
       ],
     };
   },
@@ -98,9 +98,22 @@ export default {
     toggleFieldSelector() {
       this.showFieldSelector = !this.showFieldSelector;
     },
+    async loadBusinessMembers() {
+      try {
+        const response = await fetch("/businessMembers.json");
+        const data = await response.json();
+        // Creiamo un mapping ID -> nickname
+        this.businessMembers = data.reduce((map, member) => {
+          map[member.id] = member.value.nickname || "Sconosciuto";
+          return map;
+        }, {});
+      } catch (error) {
+        console.error("Errore nel caricamento dei dati dei business members:", error);
+      }
+    },
     async loadClosedPayments() {
       try {
-        const response = await fetch("/closedpayments.json"); // Assicurati che il file sia nella cartella "public"
+        const response = await fetch("/closedpayments.json");
         const data = await response.json();
         this.groupedData = this.groupOrdersByBusinessActor(data);
       } catch (error) {
@@ -112,20 +125,23 @@ export default {
 
       data.forEach((session) => {
         const businessActor = session.value?.businessActor?.name || "Sconosciuto";
-        const referenceDate = session.value?.referenceDate || "Data non disponibile"; // Prende la data dal session
+        const referenceDate = session.value?.referenceDate || "Data non disponibile";
 
         const items = session.value?.printedOrderItems?.map((item) => ({
           product: item.orderItemName || "Prodotto non disponibile",
           computedUnitaryPrice: item.computedUnitaryPrice || 0,
+          discountedPrice: item.finalPriceWithSessionDiscounts || 0,
+          vat: item.vatRecordCategory?.rate || "N/A",
+          businessMember:
+            this.businessMembers[session.value?.businessMemberId] || "Operatore sconosciuto",
           quantity: item.quantity || 1,
           category: item.product?.category?.name || "Categoria non disponibile",
           tableName: session.value?.table?.name || "Tavolo non disponibile",
-          tableNumber: session.value?.table?.id || "N/A",
-          docNumber: session.value?.billNumber || "N/A",
-          guestCount: session.value?.table?.numberOfGuests || 0,
-          stayDuration: Math.round((session.value?.table?.stayingDuration || 0) / 60), // Converti secondi in minuti
-          date: referenceDate, // Associare la data corretta
-        })) || [];
+          productCode: item.product?.productId || "N/A",
+          accessNotes: session.value?.table?.accessNotes || "N/A",
+          formattedArrivalTime: new Date(session.value?.originalOrderLogCreatedDate).toLocaleTimeString("it-IT"),
+          date: referenceDate,
+        }));
 
         const existingGroup = grouped.find((group) => group.businessActor === businessActor);
         if (existingGroup) {
@@ -153,17 +169,17 @@ export default {
       this.groupedData.forEach((group) => {
         group.items.forEach((item) => {
           exportData.push({
-            "Business Actor": group.businessActor,
             Tavolo: item.tableName,
             Prodotto: item.product,
             "Prezzo Unitario": item.computedUnitaryPrice.toFixed(2),
-            Quantità: item.quantity,
             "Prezzo Complessivo": (item.computedUnitaryPrice * item.quantity).toFixed(2),
-            Categoria: item.category,
-            "Numero Tavolo": item.tableNumber,
-            "Numero Documento": item.docNumber,
-            "Quantità Ospiti": item.guestCount,
-            "Durata Permanenza (minuti)": item.stayDuration,
+            "Prezzo Scontato": item.discountedPrice.toFixed(2),
+            VAT: item.vat,
+            Operatore: item.businessMember,
+            Quantità: item.quantity,
+            "Codice Prodotto": item.productCode,
+            "Note Tavolo": item.accessNotes,
+            "Ora di Arrivo": item.formattedArrivalTime,
             Data: item.date,
           });
         });
@@ -175,7 +191,8 @@ export default {
       XLSX.writeFile(workbook, "Dati_Raggruppati.xlsx");
     },
   },
-  mounted() {
+  async mounted() {
+    await this.loadBusinessMembers(); // Carichiamo i nickname prima di caricare i pagamenti
     this.loadClosedPayments();
   },
 };
