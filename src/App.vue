@@ -26,7 +26,7 @@
     <!-- Visualizzazione Raggruppata -->
     <div v-if="viewMode === 'table' && groupedData.length">
       <h2>Dati Raggruppati per Business Actor</h2>
-      <div v-for="(group, index) in groupedData" :key="index" class="group">
+      <div v-for="(group, index) in groupedData" :key="index" class="group" style="margin-bottom: 40px;">
         <h3>Responsabile: {{ group.businessActor }}</h3>
         <table border="1">
           <thead>
@@ -41,13 +41,13 @@
               <th>Quantità</th>
               <th v-if="isFieldSelected('productCategory')">Categoria prodotto</th>
               <th v-if="isFieldSelected('productCode')">Codice Prodotto</th>
-              <th v-if="isFieldSelected('accessNotes')">Note Tavolo</th>
               <th v-if="isFieldSelected('arrivalTime')">Ora di Arrivo</th>
             </tr>
           </thead>
           <tbody>
             <template v-for="(item, itemIndex) in group.items" :key="`${item.tableName}-${itemIndex}`">
-              <tr>
+              <!-- Mostriamo le righe dei prodotti normali -->
+              <tr v-if="item.itemType !== 'note'">
                 <td>{{ item.tableName }}</td>
                 <td>{{ item.product }}</td>
                 <td v-if="isFieldSelected('unitaryPrice')">{{ item.computedUnitaryPrice.toFixed(2) }} €</td>
@@ -58,10 +58,13 @@
                 <td>{{ item.quantity }}</td>
                 <td v-if="isFieldSelected('productCategory')">{{ item.category }}</td>
                 <td v-if="isFieldSelected('productCode')">{{ item.productCode }}</td>
-                <td v-if="isFieldSelected('accessNotes')">{{ item.accessNotes }}</td>
                 <td v-if="isFieldSelected('arrivalTime')">{{ item.formattedArrivalTime }}</td>
               </tr>
-              <!-- RIGA AGGIUNTIVA: Totale del Tavolo e Data -->
+              <!-- Mostriamo le note come un'unica riga -->
+              <tr v-if="itemIndex === group.items.length - 1 || item.tableName !== group.items[itemIndex + 1]?.tableName">
+                <td colspan="10"><strong>Note: {{ group.items.filter(i => i.itemType === 'note').map(i => i.product).join(', ') }}</strong></td>
+              </tr>
+              <!-- Riga Totale e Data -->
               <tr v-if="itemIndex === group.items.length - 1 || item.tableName !== group.items[itemIndex + 1]?.tableName">
                 <td colspan="4"><strong>Totale Tavolo: {{ calculateTableTotal(group.items, item.tableName).toFixed(2) }} €</strong></td>
                 <td colspan="4"><strong>Data: {{ item.date }}</strong></td>
@@ -89,7 +92,6 @@ export default {
         { key: "unitaryPrice", label: "Prezzo unitario" },
         { key: "productCategory", label: "Categoria prodotto" },
         { key: "productCode", label: "Codice prodotto" },
-        { key: "accessNotes", label: "Note Tavolo" },
         { key: "arrivalTime", label: "Ora di arrivo" },
       ],
     };
@@ -138,7 +140,7 @@ export default {
           category: item.product?.category?.name || "Categoria non disponibile",
           tableName: session.value?.table?.name || "Tavolo non disponibile",
           productCode: item.product?.productId || "N/A",
-          accessNotes: session.value?.table?.accessNotes || "N/A",
+          itemType: item.itemType || "product",
           formattedArrivalTime: new Date(session.value?.originalOrderLogCreatedDate).toLocaleTimeString("it-IT"),
           date: referenceDate,
         }));
@@ -158,7 +160,7 @@ export default {
     },
     calculateTableTotal(items, tableName) {
       return items
-        .filter((item) => item.tableName === tableName)
+        .filter((item) => item.tableName === tableName && item.itemType !== 'note')
         .reduce((total, item) => total + item.computedUnitaryPrice * item.quantity, 0);
     },
     isFieldSelected(field) {
@@ -167,9 +169,13 @@ export default {
     exportToExcel() {
       const exportData = [];
       this.groupedData.forEach((group) => {
-        group.items.forEach((item) => {
-          exportData.push({
-            Tavolo: item.tableName,
+        const notes = group.items.filter(item => item.itemType === 'note').map(item => item.product);
+
+        group.items.forEach((item, index) => {
+          if (item.itemType === 'note') return;
+
+          const row = {
+            Tavolo: index === 0 ? item.tableName : "",
             Prodotto: item.product,
             "Prezzo Unitario": item.computedUnitaryPrice.toFixed(2),
             "Prezzo Complessivo": (item.computedUnitaryPrice * item.quantity).toFixed(2),
@@ -178,10 +184,13 @@ export default {
             Operatore: item.businessMember,
             Quantità: item.quantity,
             "Codice Prodotto": item.productCode,
-            "Note Tavolo": item.accessNotes,
-            "Ora di Arrivo": item.formattedArrivalTime,
-            Data: item.date,
+          };
+
+          notes.forEach((note, noteIndex) => {
+            row[`Nota${noteIndex + 1}`] = note;
           });
+
+          exportData.push(row);
         });
       });
 
@@ -230,6 +239,6 @@ td {
   text-align: center;
 }
 .group {
-  margin-bottom: 20px;
+  margin-bottom: 40px;
 }
 </style>
